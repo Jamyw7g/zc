@@ -1,4 +1,4 @@
-use std::{cmp::max, path::MAIN_SEPARATOR};
+use std::{cmp::{max, min}, path::MAIN_SEPARATOR};
 
 use regex::{RegexBuilder, escape};
 
@@ -9,9 +9,9 @@ pub fn match_anywhere(
     needles: &Vec<String>,
     haystack: &DataList,
     ignore_case: bool
-) -> Vec<(String, usize)> {
+) -> Vec<(String, f32)> {
     let mut re_needle = String::from(".*");
-    let escaped_str: Box<[String]> = needles.into_iter()
+    let escaped_str: Box<[String]> = needles.iter()
         .map(|s| escape(&s))
         .collect();
 
@@ -26,8 +26,9 @@ pub fn match_anywhere(
 
     haystack.sort()
         .iter()
-        .filter(|(k, _)| re.is_match(k))
-        .map(|(k, v)| (k.clone(), *v))
+        .filter(|&(k, _)| re.is_match(k))
+        .cloned()
+        .map(|(k, v)| (k, v))
         .collect()
 }
 
@@ -35,7 +36,7 @@ pub fn match_consecutive(
     needles: &Vec<String>,
     haystack: &DataList,
     ignore_case: bool
-) -> Vec<(String, usize)> {
+) -> Vec<(String, f32)> {
     let mut re_no_seq = String::from("[^");
     re_no_seq.push(MAIN_SEPARATOR);
     re_no_seq.push_str("]*");
@@ -43,7 +44,7 @@ pub fn match_consecutive(
     let mut re_no_seq_end = String::from(&re_no_seq);
     re_no_seq_end.push('$');
 
-    let escaped_str: Box<[String]> = needles.into_iter()
+    let escaped_str: Box<[String]> = needles.iter()
         .map(|s| escape(&s))
         .collect();
     let mut re_one_seq = String::from(&re_no_seq);
@@ -61,8 +62,9 @@ pub fn match_consecutive(
 
     haystack.sort()
         .iter()
-        .filter(|(k, _)| re.is_match(k))
-        .map(|(k, v)| (k.clone(), *v))
+        .filter(|&(k, _)| re.is_match(k))
+        .cloned()
+        .map(|(k, v)| (k, v))
         .collect()
 }
 
@@ -71,7 +73,7 @@ pub fn match_fuzzy(
     haystack: &DataList,
     ignore_case: bool,
     threshold: Option<f32>
-) -> Vec<(String, usize)> {
+) -> Vec<(String, f32)> {
     let threshold = threshold.unwrap_or(0.6);
     let needle = if ignore_case {
         needles.last().unwrap().to_lowercase()
@@ -81,11 +83,12 @@ pub fn match_fuzzy(
 
     haystack.sort()
         .iter()
-        .filter(|(k, _)| {
+        .filter(|&(k, _)| {
             let dir_name = k.split(MAIN_SEPARATOR).last().unwrap();
             letter_similarity(&needle, &dir_name, ignore_case) >= threshold
         })
-        .map(|(k, v)| (k.clone(), *v))
+        .cloned()
+        .map(|(k, v)| (k, v))
         .collect()
 }
 
@@ -98,8 +101,44 @@ fn letter_similarity(word_a: &str, word_b: &str, ignore_case: bool) -> f32 {
          word_b.chars().collect())
     };
 
-    let dist = 3;
-    let len = max(a.len(), b.len());
+    let mut init_vec: Box<[_]> = (0..=a.len()).collect();
+    let mut next;
 
-    1.0 - dist as f32 / len as f32
+    // Edition distance
+    for (h1, c1) in (1..).zip(b.iter()) {
+        next = h1;
+        for (h2, c2) in (1..).zip(a.iter()) {
+            let ij = if c1 == c2 {
+                init_vec[h2-1]
+            } else {
+                init_vec[h2-1]+1
+            };
+            let val = min(min(ij, next+1), init_vec[h2]+1);
+            init_vec[h2-1] = next;
+            next = val;
+        }
+        init_vec[init_vec.len()-1] = next;
+    }
+
+    let dist = init_vec[init_vec.len()-1] as f32;
+    let len = max(a.len(), b.len()) as f32;
+
+    1.0 - dist / len 
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_letter_similarity() {
+        let a = "kit";
+        let b = "iit";
+
+        let c = "我是谁";
+        let d = "是是谁";
+
+        assert!(f32::abs(letter_similarity(a, b, true) - letter_similarity(c, d, true)) < 1e-6);
+    }
 }

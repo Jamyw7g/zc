@@ -38,7 +38,7 @@ fn main() {
         return;
     }
     if opt_match.opt_present("v") {
-        eprintln!("zc v{}", "0.1.0");
+        eprintln!("zc v{}", option_env!("CARGO_PKG_VERSION").unwrap_or("0.1.0"));
         return;
     }
 
@@ -52,13 +52,9 @@ fn main() {
         } else 
         if opt_match.opt_present("i") {
             let weight = if let Some(val) = opt_match.opt_str("a") {
-                if let Ok(val) = val.parse() {
-                    val
-                } else {
-                    10
-                }
+                val.parse().unwrap_or(10.0)
             } else {
-                10
+                10.0
             };
             let mut data = load_data(library_path().as_path());
             let cur_dir = env::current_dir().unwrap();
@@ -67,13 +63,9 @@ fn main() {
         } else
         if opt_match.opt_present("d") {
             let weight = if let Some(val) = opt_match.opt_str("a") {
-                if let Ok(val) = val.parse() {
-                    val
-                } else {
-                    10
-                }
+                val.parse().unwrap_or(10.0)
             } else {
-                10
+                10.0
             };
             let mut data = load_data(library_path().as_path());
             let cur_dir = env::current_dir().unwrap();
