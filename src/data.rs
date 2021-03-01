@@ -35,7 +35,7 @@ impl DataList {
     pub fn decrease(&mut self, path: &str, weight: f32) {
         if let Some(v) = self.0.get_mut(path) {
             let val = *v - weight;
-            *v = val.min(0.0);
+            *v = val.max(0.0);
         }
     }
 
