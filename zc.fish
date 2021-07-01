@@ -1,7 +1,7 @@
 # change pwd hook
 function __zc_add --on-variable PWD
     status --is-command-substitution; and return
-    zc --add (pwd) > /dev/null &
+    zc --add (pwd) > /dev/null
 end
 
 

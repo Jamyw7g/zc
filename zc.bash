@@ -1,6 +1,6 @@
 # change pwd hook
 zc_add() {
-    zc --add "$(pwd)" > /dev/null &
+    zc --add "$(pwd)" > /dev/null
 }
 
 case $PROMPT_COMMAND in
