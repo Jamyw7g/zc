@@ -1,148 +1,153 @@
-use std::{env, path::Path};
+use std::env;
+use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
-use std::fs::{self, File};
 
-use getopts::{HasArg, Occur, Options};
+use getopts::Options;
 
 mod data;
 mod matcher;
 
-use data::DataList;
-use matcher::{match_anywhere, match_consecutive, match_fuzzy};
-
+use data::Data;
+use matcher::{anywhere_re, consecutive_re, match_dist};
+use std::io::{Seek, SeekFrom};
 
 fn main() {
-    let args: Vec<_> = env::args().skip(1).collect();
+    let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
-
-    opts.optopt("a", "add", "add path", "DIR");
-
-    opts.opt("i", "increase", "increase current directory weight", "WEIGHT", 
-             HasArg::Maybe, Occur::Optional);
-    opts.opt("d", "decrease", "decrease current directory weight", "WEIGHT", 
-             HasArg::Maybe, Occur::Optional);
-
-    opts.optflag("s", "stat", "show database entries and their key weights");
-    opts.optflag("", "purge", "remove non-existent paths from database");
-
-    opts.optflag("h", "help", "print this help menu");
+    opts.optopt(
+        "a",
+        "add",
+        "add new path to database with default weight",
+        "PATH",
+    );
+    opts.optflag("i", "increase", "increase current directory");
+    opts.optflag("d", "decrease", "decrease current directory");
+    opts.optflag("s", "stat", "show database, which contain path and weight");
+    opts.optflag("", "purge", "remove any non-existent paths from database");
+    opts.optflag("h", "help", "print this help");
     opts.optflag("v", "version", "show version information");
 
-    let opt_match = match opts.parse(&args) {
+    let opt_match = match opts.parse(&args[1..]) {
         Ok(m) => m,
-        Err(e) => panic!(e.to_string())
+        Err(e) => panic!("{}", e.to_string()),
     };
     if opt_match.opt_present("h") {
-        print_uage(opts);
+        print_usage(opts);
         return;
     }
     if opt_match.opt_present("v") {
-        eprintln!("zc v{}", option_env!("CARGO_PKG_VERSION").unwrap_or("0.1.0"));
+        eprintln!("zc v{}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
     if !opt_match.free.is_empty() {
         jump(opt_match.free);
-    } else {
-        if let Some(val) = opt_match.opt_str("a") {
-            let mut data = load_data(library_path().as_path());
-            data.add(&val);
-            data.serialize_into(File::create(library_path().as_path()).unwrap());
-        } else 
-        if opt_match.opt_present("i") {
-            let weight = if let Some(val) = opt_match.opt_str("a") {
-                val.parse().unwrap_or(10.0)
-            } else {
-                10.0
-            };
-            let mut data = load_data(library_path().as_path());
-            let cur_dir = env::current_dir().unwrap();
-            data.increase(cur_dir.to_str().unwrap(), weight);
-            data.serialize_into(File::create(library_path().as_path()).unwrap());
-        } else
-        if opt_match.opt_present("d") {
-            let weight = if let Some(val) = opt_match.opt_str("a") {
-                val.parse().unwrap_or(10.0)
-            } else {
-                10.0
-            };
-            let mut data = load_data(library_path().as_path());
-            let cur_dir = env::current_dir().unwrap();
-            data.decrease(cur_dir.to_str().unwrap(), weight);
-            data.serialize_into(File::create(library_path().as_path()).unwrap());
-        } else 
-        if opt_match.opt_present("s") {
-            show_stat();
-        } else 
-        if opt_match.opt_present("purge") {
-            purge();
+    } else if opt_match.opts_present(&[
+        "a".to_string(),
+        "i".to_string(),
+        "d".to_string(),
+        "purge".to_string(),
+    ]) {
+        let dbp = db_path();
+        let cur_dir = env::current_dir().unwrap().to_string_lossy().to_string();
+        let mut fp = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(dbp)
+            .unwrap();
+        let mut db = Data::deserialize_from(&mut fp).unwrap_or_else(|_| Data::new());
+        if opt_match.opt_present("a") {
+            let path = opt_match.opt_str("a").unwrap();
+            db.increase(path);
+        } else if opt_match.opt_present("i") {
+            db.increase(cur_dir);
+        } else if opt_match.opt_present("d") {
+            db.decrease(cur_dir);
+        } else {
+            let num = db.purge();
+            println!("Purged {} entries.", num);
         }
+        fp.seek(SeekFrom::Start(0)).unwrap();
+        db.serialize_into(&mut fp).unwrap();
+    } else if opt_match.opt_present("s") {
+        show_db();
+    } else {
+        print_usage(opts);
     }
 }
 
-fn print_uage(opts: Options) {
-    let brief = "usage: zc [-h] [-a DIR] [-i [WEIGHT]] [-d [WEIGHT]] [-p] [-s] [-v] [DIR...]";
+fn print_usage(opts: Options) {
+    let brief = format!(
+        "{} {}\nUsage: {} [OPTIONS] [PATH...]",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_NAME")
+    );
     eprintln!("{}", opts.usage(&brief));
 }
 
-fn library_path() -> PathBuf {
-    let mut library = dirs::home_dir().unwrap();
-    library.push(".config");
-    if !library.exists() {
-        fs::create_dir(library.as_path()).unwrap();
+fn db_path() -> PathBuf {
+    let mut config_path = dirs::home_dir().unwrap();
+    config_path.push(".config");
+    if !config_path.exists() {
+        fs::create_dir(config_path.as_path()).unwrap();
     }
-    library.push("r_zc.db");
-    library
-}
-
-fn load_data<P: AsRef<Path>>(path: P) -> DataList {
-    if path.as_ref().exists() {
-        DataList::deserialize_from(File::open(path.as_ref()).unwrap())
-    } else {
-        DataList::new()
-    }
+    config_path.push("rzc.db");
+    config_path
 }
 
 fn jump(needles: Vec<String>) {
-    let data = load_data(library_path().as_path());
+    let db = if let Ok(fp) = File::open(db_path()) {
+        if let Ok(db) = Data::deserialize_from(fp) {
+            db
+        } else {
+            print!(".");
+            return;
+        }
+    } else {
+        print!(".");
+        return;
+    };
 
-    let one_path = match_consecutive(&needles, &data, true).iter()
-        .chain(match_fuzzy(&needles, &data, true, None).iter())
-        .chain(match_anywhere(&needles, &data, true).iter())
-        .filter(|(p, _)| Path::new(p).to_path_buf() != env::current_dir().unwrap())
-        .take(1)
-        .cloned()
+    let a_re = anywhere_re(&needles, true);
+    let c_re = consecutive_re(&needles, true);
+    let cur_dir = env::current_dir().unwrap();
+    let sorted = db.sorted();
+    let sorted_main: Vec<_> = sorted
+        .iter()
+        .filter(|(p, _)| {
+            let path = PathBuf::from(p);
+            path.exists() && path != cur_dir
+        })
+        .collect();
+    let sorted_a = sorted_main.clone();
+    let sorted_f = sorted_main.clone();
+    let path = sorted_main
+        .iter()
+        .filter(|(p, _)| c_re.is_match(p))
+        .chain(
+            sorted_f
+                .iter()
+                .filter(|(p, _)| match_dist(needles.last().unwrap(), p, true, 0.6)),
+        )
+        .chain(sorted_a.iter().filter(|(p, _)| a_re.is_match(p)))
         .next();
 
-    if let Some(path) = one_path {
-        print!("{}", path.0);
+    if let Some((path, _)) = path {
+        print!("{}", path);
     } else {
         print!(".");
     }
 }
 
-fn show_stat() {
-    let path = library_path();
-    if path.exists() {
-        let fp = File::open(path.as_path()).unwrap();
-        let data = DataList::deserialize_from(fp);
-        print!("{}", data.to_string());
-    } else {
-        eprintln!("can't found database file, please check");
+fn show_db() {
+    if let Ok(fp) = File::open(db_path()) {
+        if let Ok(db) = Data::deserialize_from(fp) {
+            print!("{}", db.to_string());
+            return;
+        }
     }
-}
-
-fn purge() {
-    let path = library_path();
-    if path.exists() {
-        let fp = File::open(path.as_path()).unwrap();
-        let mut data = DataList::deserialize_from(fp);
-        let num = data.clean();
-        println!("cleanup {} item", num);
-        let fp = File::create(path.as_path()).unwrap();
-        data.serialize_into(fp);
-    } else {
-        eprintln!("nothing to cleanup.");
-    }
+    eprintln!("There is no database to show.")
 }
