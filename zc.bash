@@ -20,6 +20,10 @@ z() {
     fi
 
     output="$(zc ${@})"
+    if [ ! -d $output ]; then
+        echo -n $output
+        exit 1
+    fi
     if [ -t 1 ]; then  # if stdout is a terminal, use colors
         echo -e "\\033[31m${output}\\033[0m"
     else

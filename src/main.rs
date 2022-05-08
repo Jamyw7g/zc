@@ -1,5 +1,6 @@
 use std::env;
 use std::fs::{self, File, OpenOptions};
+use std::io::Seek;
 use std::path::PathBuf;
 
 use getopts::Options;
@@ -9,7 +10,22 @@ mod matcher;
 
 use data::Data;
 use matcher::{anywhere_re, consecutive_re, match_dist};
-use std::io::{Seek, SeekFrom};
+use once_cell::sync::Lazy;
+
+static DB: Lazy<File> = Lazy::new(|| {
+    let mut config_path = dirs::home_dir().unwrap();
+    config_path.push(".config");
+    if !config_path.exists() {
+        fs::create_dir(&config_path).unwrap();
+    }
+    config_path.push("rzc.db");
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&config_path)
+        .expect("Fail to open db.")
+});
 
 fn main() {
     let args: Vec<_> = env::args().collect();
@@ -49,28 +65,22 @@ fn main() {
         "d".to_string(),
         "purge".to_string(),
     ]) {
-        let dbp = db_path();
-        let cur_dir = env::current_dir().unwrap().to_string_lossy().to_string();
-        let mut fp = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(dbp)
-            .unwrap();
-        let mut db = Data::deserialize_from(&mut fp).unwrap_or_else(|_| Data::new());
+        let mut data = Data::deserialize_from(&*DB).unwrap_or_else(|_| Data::new());
+        let cur_dir = env::current_dir().unwrap().display().to_string();
         if opt_match.opt_present("a") {
             let path = opt_match.opt_str("a").unwrap();
-            db.increase(path);
+            data.increase(path);
         } else if opt_match.opt_present("i") {
-            db.increase(cur_dir);
+            data.increase(cur_dir);
         } else if opt_match.opt_present("d") {
-            db.decrease(cur_dir);
+            data.decrease(cur_dir);
         } else {
-            let num = db.purge();
+            let num = data.purge();
             println!("Purged {} entries.", num);
         }
-        fp.seek(SeekFrom::Start(0)).unwrap();
-        db.serialize_into(&mut fp).unwrap();
+        (&*DB).seek(std::io::SeekFrom::Start(0)).unwrap();
+        DB.set_len(0).unwrap();
+        data.serialize_into(&*DB).unwrap();
     } else if opt_match.opt_present("s") {
         show_db();
     } else {
@@ -88,24 +98,9 @@ fn print_usage(opts: Options) {
     eprintln!("{}", opts.usage(&brief));
 }
 
-fn db_path() -> PathBuf {
-    let mut config_path = dirs::home_dir().unwrap();
-    config_path.push(".config");
-    if !config_path.exists() {
-        fs::create_dir(config_path.as_path()).unwrap();
-    }
-    config_path.push("rzc.db");
-    config_path
-}
-
 fn jump(needles: Vec<String>) {
-    let db = if let Ok(fp) = File::open(db_path()) {
-        if let Ok(db) = Data::deserialize_from(fp) {
-            db
-        } else {
-            print!(".");
-            return;
-        }
+    let data = if let Ok(data) = Data::deserialize_from(&*DB) {
+        data
     } else {
         print!(".");
         return;
@@ -114,7 +109,7 @@ fn jump(needles: Vec<String>) {
     let a_re = anywhere_re(&needles, true);
     let c_re = consecutive_re(&needles, true);
     let cur_dir = env::current_dir().unwrap();
-    let sorted = db.sorted();
+    let sorted = data.sorted();
     let sorted_main: Vec<_> = sorted
         .iter()
         .filter(|(p, _)| {
@@ -143,11 +138,7 @@ fn jump(needles: Vec<String>) {
 }
 
 fn show_db() {
-    if let Ok(fp) = File::open(db_path()) {
-        if let Ok(db) = Data::deserialize_from(fp) {
-            print!("{}", db.to_string());
-            return;
-        }
+    if let Ok(data) = Data::deserialize_from(&*DB) {
+        print!("{}", data.to_string());
     }
-    eprintln!("There is no database to show.")
 }
